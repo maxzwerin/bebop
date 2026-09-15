@@ -8,24 +8,7 @@
 
 typedef unsigned long long u64;
 
-u64 perft(Board *board, int depth, int ply) {
-    Undo undo;
-    if (depth == 0) return 1ULL;
-
-    Move moves[MAX_MOVES];
-    int count = legalMoves(board, moves);
-
-    u64 nodes = 0ULL;
-
-    for (int i = 0; i < count; i++) {
-        doMove(board, moves[i], &undo);
-        nodes += perft(board, depth - 1, ply + 1);
-        undoMove(board, moves[i], &undo);
-    }
-
-    return nodes;
-}
-
+#define PRETTY_PRINT true
 #define MAX_DEPTH 5
 #define COLOR_RED   "\x1b[31m"
 #define COLOR_GREEN "\x1b[32m"
@@ -87,14 +70,29 @@ char* FENS[128] = {
     "n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1", "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1", "rnbqkb1r/ppppp1pp/7n/4Pp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3"
 };
 
-void run_perft_suite(void) {
-    printf("\n===========================================================\n");
-    printf("RUNNING FULL PERFT SUITE\n");
-    printf("===========================================================\n\n");
+u64 perft(Board *board, int depth, int ply) {
+    Undo undo;
+    if (depth == 0) return 1ULL;
 
+    Move moves[MAX_MOVES];
+    int count = legalMoves(board, moves);
+
+    u64 nodes = 0ULL;
+
+    for (int i = 0; i < count; i++) {
+        doMove(board, moves[i], &undo);
+        nodes += perft(board, depth - 1, ply + 1);
+        undoMove(board, moves[i], &undo);
+    }
+
+    return nodes;
+}
+
+double run_perft_suite(void) {
     Board board;
     int totalFens = 128;
     int totalTests = totalFens;
+    (void)totalTests;
 
     for (int f = 0; f < totalFens; f++) {
         setFen(&board, FENS[f]);
@@ -106,7 +104,7 @@ void run_perft_suite(void) {
             u64 nodes = perft(&board, d, 0);
             u64 expected = DEPTH5_RESULTS[f];
 
-            if (d == MAX_DEPTH) {
+            if (d == MAX_DEPTH && PRETTY_PRINT) {
                 clock_gettime(CLOCK_MONOTONIC, &end);
                 double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
                 char timeStr[16];
@@ -114,17 +112,33 @@ void run_perft_suite(void) {
 
                 if (nodes != expected) ppPERFT(false,f,nodes,FENS[f],timeStr);
                 else ppPERFT(true,f,nodes,FENS[f],timeStr);
+            } else if (d == MAX_DEPTH) {
+                if (nodes != expected) return false;
             }
         }
     }
-    printf("\n===========================================================\n");
-    printf("COMPLETED FULL PERFT SUITE\n");
-    printf("===========================================================\n\n");
+
+    return true;
 }
+
 int main(void) {
     initMoveGen();
 
-    run_perft_suite();
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    return 0;
+    int ok = run_perft_suite();
+
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+
+    printf("\n%s in %.2fs\n", ok ? "ALL TESTS PASSED" : "SOME TESTS FAILED", elapsed);
+
+    Board board;
+    setFen(&board, FENS[0]);
+    u64 d6 = perft(&board, 6, 0);
+    if (d6 != 119060324) printf("WARN: startpos depth 6 mismatch: got %llu, expected 119060324\n", d6);
+    else printf("startpos depth 6 OK: %llu\n", d6);
+
+    return ok ? 0 : 1;
 }

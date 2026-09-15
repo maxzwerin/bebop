@@ -1,14 +1,14 @@
-#include "utils.c"
+#include "movegen.h"
 
 U64 KNIGHT_REF[64];
 U64 KING_REF[64];
 U64 ROOK_REF[64];
 U64 BISHOP_REF[64];
 U64 PAWN_ATTACKS[2][64];
-U64 BISHOP_ATTACKS[64][512];
-U64 ROOK_ATTACKS[64][4096];
+static U64 BISHOP_ATTACKS[64][512];
+static U64 ROOK_ATTACKS[64][4096];
 
-int ROOK_RELEVANT_BITS[64] = {
+static int ROOK_RELEVANT_BITS[64] = {
     12, 11, 11, 11, 11, 11, 11, 12,
     11, 10, 10, 10, 10, 10, 10, 11,
     11, 10, 10, 10, 10, 10, 10, 11,
@@ -18,7 +18,7 @@ int ROOK_RELEVANT_BITS[64] = {
     11, 10, 10, 10, 10, 10, 10, 11,
     12, 11, 11, 11, 11, 11, 11, 12
 };
-int BISHOP_RELEVANT_BITS[64] = {
+static int BISHOP_RELEVANT_BITS[64] = {
     6, 5, 5, 5, 5, 5, 5, 6,
     5, 5, 5, 5, 5, 5, 5, 5,
     5, 5, 7, 7, 7, 7, 5, 5,
@@ -29,7 +29,7 @@ int BISHOP_RELEVANT_BITS[64] = {
     6, 5, 5, 5, 5, 5, 5, 6
 };
 
-U64 ROOK_MAGICS[64] = {
+static U64 ROOK_MAGICS[64] = {
     0xa8002c000108020ULL,  0x6c00049b0002001ULL,  0x100200010090040ULL,
     0x2480041000800801ULL, 0x280028004000800ULL,  0x900410008040022ULL,
     0x280020001001080ULL,  0x2880002041000080ULL, 0xa000800080400034ULL,
@@ -54,7 +54,7 @@ U64 ROOK_MAGICS[64] = {
     0x26002114058042ULL,
 };
 
-U64 BISHOP_MAGICS[64] = {
+static U64 BISHOP_MAGICS[64] = {
     0x89a1121896040240ULL, 0x2004844802002010ULL, 0x2068080051921000ULL,
     0x62880a0220200808ULL, 0x4042004000000ULL,    0x100822020200011ULL,
     0xc00444222012000aULL, 0x28808801216001ULL,   0x400492088408100ULL,
@@ -79,20 +79,20 @@ U64 BISHOP_MAGICS[64] = {
     0x40102000a0a60140ULL,
 };
 
-U64 occupancyMask(int index, int bits, U64 attackMask) {
+static U64 occupancyMask(int index, int bits, U64 attackMask) {
     U64 occ = 0ULL;
 
     for (int i = 0; i < bits; i++) {
-        int square = __builtin_ctzll(attackMask);
+        int square = LSB(attackMask);
         attackMask &= attackMask - 1;
 
-        if (index & (1 << i)) occ |= (1ULL << square);
+        if (index & (1 << i)) occ |= BIT(square);
     }
 
     return occ;
 }
 
-U64 rayAttacks(int square, int dr, int df, U64 block) {
+static U64 rayAttacks(int square, int dr, int df, U64 block) {
     U64 attacks = 0ULL;
 
     int r = square / 8;
@@ -102,7 +102,7 @@ U64 rayAttacks(int square, int dr, int df, U64 block) {
 
     while (r >= 0 && r <= 7 && f >= 0 && f <= 7) {
         int sq = r * 8 + f;
-        U64 bit = 1ULL << sq;
+        U64 bit = BIT(sq);
 
         attacks |= bit;
         if (block & bit) break;
@@ -113,49 +113,49 @@ U64 rayAttacks(int square, int dr, int df, U64 block) {
     return attacks;
 }
 
-U64 bishopAttacksOnTheFly(int square, U64 block) {
+static U64 bishopAttacksOnTheFly(int square, U64 block) {
     return rayAttacks(square,  1,  1, block) | rayAttacks(square,  1, -1, block) | 
            rayAttacks(square, -1,  1, block) | rayAttacks(square, -1, -1, block);
 }
 
-U64 rookAttacksOnTheFly(int square, U64 block) {
+static U64 rookAttacksOnTheFly(int square, U64 block) {
     return rayAttacks(square,  1,  0, block) | rayAttacks(square, -1,  0, block) |
            rayAttacks(square,  0,  1, block) | rayAttacks(square,  0, -1, block);
 }
 
-U64 bishopMovement(int square) {
+static U64 bishopMovement(int square) {
     int f, r;
     int tf = square % 8;
     int tr = square / 8;
-    
-    U64 movement = 0ULL;
-    for (r = tr + 1, f = tf + 1; r <= 6 && f <= 6; r++, f++) movement |= (1ULL << (r * 8 + f));
-    for (r = tr + 1, f = tf - 1; r <= 6 && f >= 1; r++, f--) movement |= (1ULL << (r * 8 + f));
-    for (r = tr - 1, f = tf + 1; r >= 1 && f <= 6; r--, f++) movement |= (1ULL << (r * 8 + f));
-    for (r = tr - 1, f = tf - 1; r >= 1 && f >= 1; r--, f--) movement |= (1ULL << (r * 8 + f));
-    
-    return movement;
-}
 
-U64 rookMovement(int square) {
-    int f, r;
-    int tf = square % 8;
-    int tr = square / 8;
     U64 movement = 0ULL;
-
-    for (r = tr + 1; r <= 6; r++) movement |= (1ULL << (r * 8 + tf));
-    for (r = tr - 1; r >= 1; r--) movement |= (1ULL << (r * 8 + tf));
-    for (f = tf + 1; f <= 6; f++) movement |= (1ULL << (tr * 8 + f));
-    for (f = tf - 1; f >= 1; f--) movement |= (1ULL << (tr * 8 + f));
+    for (r = tr + 1, f = tf + 1; r <= 6 && f <= 6; r++, f++) movement |= BIT(r * 8 + f);
+    for (r = tr + 1, f = tf - 1; r <= 6 && f >= 1; r++, f--) movement |= BIT(r * 8 + f);
+    for (r = tr - 1, f = tf + 1; r >= 1 && f <= 6; r--, f++) movement |= BIT(r * 8 + f);
+    for (r = tr - 1, f = tf - 1; r >= 1 && f >= 1; r--, f--) movement |= BIT(r * 8 + f);
 
     return movement;
 }
 
-void initSliders() {
+static U64 rookMovement(int square) {
+    int f, r;
+    int tf = square % 8;
+    int tr = square / 8;
+    U64 movement = 0ULL;
+
+    for (r = tr + 1; r <= 6; r++) movement |= BIT(r * 8 + tf);
+    for (r = tr - 1; r >= 1; r--) movement |= BIT(r * 8 + tf);
+    for (f = tf + 1; f <= 6; f++) movement |= BIT(tr * 8 + f);
+    for (f = tf - 1; f >= 1; f--) movement |= BIT(tr * 8 + f);
+
+    return movement;
+}
+
+static void initSliders() {
     for (int square = 0; square < 64; square++) {
         BISHOP_REF[square] = bishopMovement(square);
         ROOK_REF[square] = rookMovement(square);
-        
+
         U64 bishopMask = BISHOP_REF[square];
         U64 rookMask = ROOK_REF[square];
         int bishopRelevantBits = BISHOP_RELEVANT_BITS[square];
@@ -166,42 +166,42 @@ void initSliders() {
         for (int i = 0; i < bishopOccupancyVariations; i++) {
             U64 occ = occupancyMask(i, bishopRelevantBits, bishopMask);
             U64 magic_id = occ * BISHOP_MAGICS[square] >> (64 - bishopRelevantBits);
-            BISHOP_ATTACKS[square][magic_id] = bishopAttacksOnTheFly(square, occ);                
+            BISHOP_ATTACKS[square][magic_id] = bishopAttacksOnTheFly(square, occ);
         }
 
         for (int i = 0; i < rookOccupancyVariations; i++) {
             U64 occ = occupancyMask(i, rookRelevantBits, rookMask);
             U64 magic_id = occ * ROOK_MAGICS[square] >> (64 - rookRelevantBits);
-            ROOK_ATTACKS[square][magic_id] = rookAttacksOnTheFly(square, occ);                
+            ROOK_ATTACKS[square][magic_id] = rookAttacksOnTheFly(square, occ);
         }
     }
 }
 
-void initPawnAttacks() {
+static void initPawnAttacks() {
     for (int sq = 0; sq < 64; sq++) {
-        U64 bb = 1ULL << sq;
+        U64 bb = BIT(sq);
 
-        PAWN_ATTACKS[WHITE][sq] = ((bb << 7) & ~FILE_H) | ((bb << 9) & ~FILE_A);
-        PAWN_ATTACKS[BLACK][sq] = ((bb >> 7) & ~FILE_A) | ((bb >> 9) & ~FILE_H);
+        PAWN_ATTACKS[1][sq] = ((bb << 7) & ~FILE_H) | ((bb << 9) & ~FILE_A);
+        PAWN_ATTACKS[0][sq] = ((bb >> 7) & ~FILE_A) | ((bb >> 9) & ~FILE_H);
     }
 }
 
 U64 getBishopAttacks(int square, U64 occupancy) {
-	occupancy &= BISHOP_REF[square];
-	occupancy *=  BISHOP_MAGICS[square];
-	occupancy >>= 64 - BISHOP_RELEVANT_BITS[square];
-	return BISHOP_ATTACKS[square][occupancy];
+    occupancy &= BISHOP_REF[square];
+    occupancy *=  BISHOP_MAGICS[square];
+    occupancy >>= 64 - BISHOP_RELEVANT_BITS[square];
+    return BISHOP_ATTACKS[square][occupancy];
 }
 
 U64 getRookAttacks(int square, U64 occ) {
-	occ &= ROOK_REF[square];
-	occ *=  ROOK_MAGICS[square];
-	occ >>= 64 - ROOK_RELEVANT_BITS[square];
-	return ROOK_ATTACKS[square][occ];
+    occ &= ROOK_REF[square];
+    occ *=  ROOK_MAGICS[square];
+    occ >>= 64 - ROOK_RELEVANT_BITS[square];
+    return ROOK_ATTACKS[square][occ];
 }
 
 U64 getKnightAttacks(int sq) {
-    U64 knight = 1ULL << sq; 
+    U64 knight = BIT(sq);
     U64 FILE_AB = FILE_A | FILE_B;
     U64 FILE_GH = FILE_G | FILE_H;
     U64 attacks = ((knight >> 15) & ~FILE_A)  | ((knight << 15) & ~FILE_H)  |
@@ -213,7 +213,7 @@ U64 getKnightAttacks(int sq) {
 }
 
 U64 getKingAttacks(int sq) {
-    U64 king = 1ULL << sq; 
+    U64 king = BIT(sq);
     U64 attacks = ((king >> 1) & ~FILE_H) | ((king << 1) & ~FILE_A) | 
                   ((king >> 7) & ~FILE_A) | ((king >> 9) & ~FILE_H) |
                   ((king << 7) & ~FILE_H) | ((king << 9) & ~FILE_A) |
@@ -222,18 +222,8 @@ U64 getKingAttacks(int sq) {
     return attacks;
 }
 
-U64 getPawnAttacks(int sq, Board *board, int color) {
-    U64 pawn = 1ULL << sq; 
-    U64 attacks = 0ULL;
-
-    if (color) attacks = ((pawn & ~FILE_A) << 7) | ((pawn & ~FILE_H) << 9);
-    else attacks = (pawn >> 7 & ~FILE_A) | (pawn >> 9 & ~FILE_H);
-
-    return attacks;
-}
-
 U64 getPawnMoves(int square, Board *board, int color) {
-    U64 pawn = 1ULL << square;
+    U64 pawn = BIT(square);
     U64 friendly = color ? board->whiteBB : board->blackBB;
     U64 occ = board->whiteBB | board->blackBB;
 
@@ -252,7 +242,7 @@ U64 getPawnMoves(int square, Board *board, int color) {
         dbl &= ~occ;
     }
 
-    if (board->enp >= 0) enp = 1ULL << board->enp;
+    if (board->enp >= 0) enp = BIT(board->enp);
 
     attacks = (PAWN_ATTACKS[color][square] & (occ | enp));
 
@@ -260,12 +250,41 @@ U64 getPawnMoves(int square, Board *board, int color) {
     return attacks & ~friendly;
 }
 
-void initKnightMovementTable(void) {
+static void initKnightMovementTable(void) {
     for (int sq = 0; sq < 64; sq++) KNIGHT_REF[sq] = getKnightAttacks(sq);
 }
 
-void initKingMovementTable(void) {
+static void initKingMovementTable(void) {
     for (int sq = 0; sq < 64; sq++) KING_REF[sq] = getKingAttacks(sq);
+}
+
+/* ---------------------------------------------------------------------
+ * BETWEEN[a][b]: squares strictly between a and b (exclusive), if they
+ * lie on a common rank/file/diagonal - else 0.
+ * LINE[a][b]:    the *entire* rank/file/diagonal through a and b,
+ *                edge to edge (inclusive of both) - else 0.
+ * Used by the checkers/pins-based legal move generator below so it
+ * doesn't need make/unmake to find blocking squares or pin rays.
+ * ------------------------------------------------------------------- */
+static U64 BETWEEN[64][64];
+static U64 LINE[64][64];
+
+static const int LINE_DR[8] = {  1, -1,  0,  0,  1,  1, -1, -1 };
+static const int LINE_DF[8] = {  0,  0,  1, -1,  1, -1,  1, -1 };
+
+static void initLines(void) {
+    for (int a = 0; a < 64; a++) {
+        for (int dir = 0; dir < 8; dir++) {
+            U64 fullRay = rayAttacks(a, LINE_DR[dir], LINE_DF[dir], 0ULL);
+            U64 ray = fullRay;
+            while (ray) {
+                int b = POP_LSB(ray);
+                BETWEEN[a][b] = rayAttacks(a, LINE_DR[dir], LINE_DF[dir], BIT(b)) & ~BIT(b);
+                U64 backRay = rayAttacks(a, -LINE_DR[dir], -LINE_DF[dir], 0ULL);
+                LINE[a][b] = fullRay | backRay | BIT(a);
+            }
+        }
+    }
 }
 
 void initMoveGen() {
@@ -273,10 +292,10 @@ void initMoveGen() {
     initKingMovementTable();
     initPawnAttacks();
     initSliders();
+    initLines();
 }
 
-int isSquareAttacked(Board *b, int sq, int attacker) {
-    U64 occ      = b->whiteBB | b->blackBB;
+bool isSquareAttackedWithOcc(Board *b, int sq, int attacker, U64 occ) {
     U64 atkBB    = attacker ? b->whiteBB : b->blackBB;
     U64 pawnBB   = b->pawnBB   & atkBB;
     U64 knightBB = b->knightBB & atkBB;
@@ -285,13 +304,17 @@ int isSquareAttacked(Board *b, int sq, int attacker) {
     U64 queenBB  = b->queenBB  & atkBB;
     U64 kingBB   = b->kingBB   & atkBB;
 
-    if (PAWN_ATTACKS[!attacker][sq] & pawnBB) return 1;
-    if (KNIGHT_REF[sq] & knightBB) return 1;
-    if (KING_REF[sq] & kingBB) return 1;
-    if (getBishopAttacks(sq, occ) & (bishopBB | queenBB)) return 1;
-    if (getRookAttacks(sq, occ) & (rookBB | queenBB)) return 1;
+    if (PAWN_ATTACKS[!attacker][sq] & pawnBB) return true;
+    if (KNIGHT_REF[sq] & knightBB) return true;
+    if (KING_REF[sq] & kingBB) return true;
+    if (getBishopAttacks(sq, occ) & (bishopBB | queenBB)) return true;
+    if (getRookAttacks(sq, occ) & (rookBB | queenBB)) return true;
 
-    return 0;
+    return false;
+}
+
+bool isSquareAttacked(Board *b, int sq, int attacker) {
+    return isSquareAttackedWithOcc(b, sq, attacker, b->whiteBB | b->blackBB);
 }
 
 void clearCastleRights(Board *board, int clear) {
@@ -305,7 +328,7 @@ void doMove(Board *board, Move move, Undo *undo) {
     int flag  = EXTRACT_FLAG(move);
 
     int turn = board->turn;
-    U64 fromMask = 1ULL << from;
+    U64 fromMask = BIT(from);
     int pieceAgnostic = piece % 6;
 
     int isEnp = (to == board->enp) && (pieceAgnostic == PAWN);
@@ -318,8 +341,8 @@ void doMove(Board *board, Move move, Undo *undo) {
     if (isEnp) {
         int toSq = board->enp;
         int capturedSq = board->enp + (board->turn ? -8 : 8);
-        U64 toMask = 1ULL << toSq;
-        U64 capMask = 1ULL << capturedSq;
+        U64 toMask = BIT(toSq);
+        U64 capMask = BIT(capturedSq);
 
         board->pawnBB ^= fromMask | toMask | capMask;
         if (turn) {
@@ -354,25 +377,25 @@ void doMove(Board *board, Move move, Undo *undo) {
     /* deal with castling */
     if (IS_CASTLE(flag)) {
         if (piece == K) {
-            board->kingBB  &= ~(1ULL << E1); board->kingBB  |= 1ULL << G1;
-            board->whiteBB &= ~(1ULL << E1); board->whiteBB |= 1ULL << G1;
-            board->rookBB  &= ~(1ULL << H1); board->rookBB  |= 1ULL << F1;
-            board->whiteBB &= ~(1ULL << H1); board->whiteBB |= 1ULL << F1;
+            board->kingBB  &= ~BIT(E1); board->kingBB  |= BIT(G1);
+            board->whiteBB &= ~BIT(E1); board->whiteBB |= BIT(G1);
+            board->rookBB  &= ~BIT(H1); board->rookBB  |= BIT(F1);
+            board->whiteBB &= ~BIT(H1); board->whiteBB |= BIT(F1);
         } else if (piece == Q) {
-            board->kingBB  &= ~(1ULL << E1); board->kingBB  |= 1ULL << C1;
-            board->whiteBB &= ~(1ULL << E1); board->whiteBB |= 1ULL << C1;
-            board->rookBB  &= ~(1ULL << A1); board->rookBB  |= 1ULL << D1;
-            board->whiteBB &= ~(1ULL << A1); board->whiteBB |= 1ULL << D1;
+            board->kingBB  &= ~BIT(E1); board->kingBB  |= BIT(C1);
+            board->whiteBB &= ~BIT(E1); board->whiteBB |= BIT(C1);
+            board->rookBB  &= ~BIT(A1); board->rookBB  |= BIT(D1);
+            board->whiteBB &= ~BIT(A1); board->whiteBB |= BIT(D1);
         } else if (piece == k) {
-            board->kingBB  &= ~(1ULL << E8); board->kingBB  |= 1ULL << G8;
-            board->blackBB &= ~(1ULL << E8); board->blackBB |= 1ULL << G8;
-            board->rookBB  &= ~(1ULL << H8); board->rookBB  |= 1ULL << F8;
-            board->blackBB &= ~(1ULL << H8); board->blackBB |= 1ULL << F8;
+            board->kingBB  &= ~BIT(E8); board->kingBB  |= BIT(G8);
+            board->blackBB &= ~BIT(E8); board->blackBB |= BIT(G8);
+            board->rookBB  &= ~BIT(H8); board->rookBB  |= BIT(F8);
+            board->blackBB &= ~BIT(H8); board->blackBB |= BIT(F8);
         } else if (piece == q) {
-            board->kingBB  &= ~(1ULL << E8); board->kingBB  |= 1ULL << C8;
-            board->blackBB &= ~(1ULL << E8); board->blackBB |= 1ULL << C8;
-            board->rookBB  &= ~(1ULL << A8); board->rookBB  |= 1ULL << D8;
-            board->blackBB &= ~(1ULL << A8); board->blackBB |= 1ULL << D8;
+            board->kingBB  &= ~BIT(E8); board->kingBB  |= BIT(C8);
+            board->blackBB &= ~BIT(E8); board->blackBB |= BIT(C8);
+            board->rookBB  &= ~BIT(A8); board->rookBB  |= BIT(D8);
+            board->blackBB &= ~BIT(A8); board->blackBB |= BIT(D8);
         }
 
         /* clear castle rights for color and return */
@@ -387,10 +410,10 @@ void doMove(Board *board, Move move, Undo *undo) {
     U64 *curColorBB = turn ? &board->whiteBB : &board->blackBB;
     U64 *oppColorBB = turn ? &board->blackBB : &board->whiteBB;
 
-    U64 toMask = 1ULL << to;
+    U64 toMask = BIT(to);
 
     /* pick up piece, wait to put down*/
-    *pieceThatMovedBB ^= 1ULL << from; *curColorBB ^= 1ULL << from;
+    *pieceThatMovedBB ^= BIT(from); *curColorBB ^= BIT(from);
 
     /* check if piece has been captured */
     if (*oppColorBB & toMask) {
@@ -416,12 +439,12 @@ void doMove(Board *board, Move move, Undo *undo) {
 
     /* check if promotion / put down piece */
     if (IS_PROMO(flag)) {
-        U64 promoMask = 1ULL << to;
+        U64 promoMask = BIT(to);
         U64 *promoBB = (&board->pawnBB + PROMO_PT(flag));
         *promoBB |= promoMask;
         *curColorBB |= promoMask;
     } else {
-        *pieceThatMovedBB |= 1ULL << to; *curColorBB |= 1ULL << to;
+        *pieceThatMovedBB |= BIT(to); *curColorBB |= BIT(to);
     }
 
     /* set en passant if double move from pawns starting rank */
@@ -444,12 +467,12 @@ void undoMove(Board *board, Move move, Undo *undo) {
     int turn = !board->turn;
     int pieceAgnostic = piece % 6;
 
-    U64 fromMask = 1ULL << from;
-    U64 toMask   = 1ULL << to;
+    U64 fromMask = BIT(from);
+    U64 toMask   = BIT(to);
 
     U64 *pieceBB    = (&board->pawnBB + pieceAgnostic);
     U64 *curColorBB = turn ? &board->whiteBB : &board->blackBB;
-    U64 *oppColorBB = turn ? &board->blackBB : &board->whiteBB;
+    // U64 *oppColorBB = turn ? &board->blackBB : &board->whiteBB;
 
     board->castle = undo->castle;
     board->enp = undo->enp;
@@ -458,7 +481,7 @@ void undoMove(Board *board, Move move, Undo *undo) {
 
     if ((pieceAgnostic == PAWN) && (to == undo->enp)) {
         int capSq = to + (turn ? -8 : 8);
-        U64 capMask = 1ULL << capSq;
+        U64 capMask = BIT(capSq);
 
         *pieceBB ^= fromMask | toMask;
         *curColorBB ^= fromMask | toMask;
@@ -472,25 +495,25 @@ void undoMove(Board *board, Move move, Undo *undo) {
 
     if (IS_CASTLE(flag)) {
         if (piece == K) {
-            board->kingBB  &= ~(1ULL << G1); board->kingBB  |= 1ULL << E1;
-            board->rookBB  &= ~(1ULL << F1); board->rookBB  |= 1ULL << H1;
-            board->whiteBB &= ~(1ULL << F1 | 1ULL << G1);
-            board->whiteBB |= 1ULL << E1 | 1ULL << H1;
+            board->kingBB  &= ~BIT(G1); board->kingBB |= BIT(E1);
+            board->rookBB  &= ~BIT(F1); board->rookBB |= BIT(H1);
+            board->whiteBB &= ~(BIT(F1) | BIT(G1));
+            board->whiteBB |= BIT(E1) | BIT(H1);
         } else if (piece == Q) {
-            board->kingBB  &= ~(1ULL << C1); board->kingBB  |= 1ULL << E1;
-            board->rookBB  &= ~(1ULL << D1); board->rookBB  |= 1ULL << A1;
-            board->whiteBB &= ~(1ULL << C1 | 1ULL << D1);
-            board->whiteBB |= 1ULL << E1 | 1ULL << A1;
+            board->kingBB  &= ~BIT(C1); board->kingBB |= BIT(E1);
+            board->rookBB  &= ~BIT(D1); board->rookBB |= BIT(A1);
+            board->whiteBB &= ~(BIT(C1) | BIT(D1));
+            board->whiteBB |= BIT(E1) | BIT(A1);
         } else if (piece == k) {
-            board->kingBB  &= ~(1ULL << G8); board->kingBB  |= 1ULL << E8;
-            board->rookBB  &= ~(1ULL << F8); board->rookBB  |= 1ULL << H8;
-            board->blackBB &= ~(1ULL << F8 | 1ULL << G8);
-            board->blackBB |= 1ULL << E8 | 1ULL << H8;
+            board->kingBB  &= ~BIT(G8); board->kingBB  |= BIT(E8);
+            board->rookBB  &= ~BIT(F8); board->rookBB  |= BIT(H8);
+            board->blackBB &= ~(BIT(F8) | BIT(G8));
+            board->blackBB |= BIT(E8) | BIT(H8);
         } else if (piece == q) {
-            board->kingBB  &= ~(1ULL << C8); board->kingBB  |= 1ULL << E8;
-            board->rookBB  &= ~(1ULL << D8); board->rookBB  |= 1ULL << A8;
-            board->blackBB &= ~(1ULL << C8 | 1ULL << D8);
-            board->blackBB |= 1ULL << E8 | 1ULL << A8;
+            board->kingBB  &= ~BIT(C8); board->kingBB  |= BIT(E8);
+            board->rookBB  &= ~BIT(D8); board->rookBB  |= BIT(A8);
+            board->blackBB &= ~(BIT(C8) | BIT (D8));
+            board->blackBB |= BIT(E8) | BIT(A8);
         }
         return;
     }
@@ -519,24 +542,24 @@ void undoMove(Board *board, Move move, Undo *undo) {
     }
 }
 
-int canCastle(Board *board, int right, U64 occ) {
-    if (!(board->castle & right)) return 0;
+bool canCastle(Board *board, int right, U64 occ) {
+    if (!(board->castle & right)) return false;
 
-    if ((right == K || right == Q) && !board->turn) return 0;
-    if ((right == k || right == q) && board->turn) return 0;
+    if ((right == K || right == Q) && !board->turn) return false;
+    if ((right == k || right == q) && board->turn) return false;
 
     switch (right) {
-        case K: if (occ & ((1ULL << F1) | (1ULL << G1))) return 0; break;
-        case Q: if (occ & ((1ULL << B1) | (1ULL << C1) | (1ULL << D1))) return 0; break;
-        case k: if (occ & ((1ULL << F8) | (1ULL << G8))) return 0; break;
-        case q: if (occ & ((1ULL << B8) | (1ULL << C8) | (1ULL << D8))) return 0; break;
-        default: return 0;
+        case K: if (occ & (BIT(F1) | BIT(G1)))           return false; break;
+        case Q: if (occ & (BIT(B1) | BIT(C1) | BIT(D1))) return false; break;
+        case k: if (occ & (BIT(F8) | BIT(G8)))           return false; break;
+        case q: if (occ & (BIT(B8) | BIT(C8) | BIT(D8))) return false; break;
+        default: return false;
     }
 
     int kingSq = board->turn ? E1 : E8;
 
     /* king cannot be in check */
-    if (isSquareAttacked(board, kingSq, !board->turn)) return 0;
+    if (isSquareAttacked(board, kingSq, !board->turn)) return false;
 
     int path1, path2;
 
@@ -545,13 +568,13 @@ int canCastle(Board *board, int right, U64 occ) {
         case Q: path1 = D1; path2 = C1; break;
         case k: path1 = F8; path2 = G8; break;
         case q: path1 = D8; path2 = C8; break;
-        default: return 0;
+        default: return false;
     }
 
-    if (isSquareAttacked(board, path1, !board->turn)) return 0;
-    if (isSquareAttacked(board, path2, !board->turn)) return 0;
+    if (isSquareAttacked(board, path1, !board->turn)) return false;
+    if (isSquareAttacked(board, path2, !board->turn)) return false;
 
-    return 1;
+    return true;
 }
 
 int pseudoMoves(Board *board, Move moves[]) {
@@ -566,9 +589,9 @@ int pseudoMoves(Board *board, Move moves[]) {
     U64 kingBB   = board->kingBB   & (turn ? board->whiteBB : board->blackBB);
 
     U64 friendly  = turn ? board->whiteBB : board->blackBB;
-    U64 enemy = turn ? board->blackBB : board->whiteBB;
+    // U64 enemy = turn ? board->blackBB : board->whiteBB;
     U64 occupancy = board->whiteBB | board->blackBB;
-    int kingSq = __builtin_ctzll(kingBB);
+    int kingSq = LSB(kingBB);
 
     U64 attackMask = 0ULL;
 
@@ -578,7 +601,7 @@ int pseudoMoves(Board *board, Move moves[]) {
 
         while (attackMask) {
             int to = POP_LSB(attackMask);
-            U64 toBB = 1ULL << to;
+            U64 toBB = BIT(to);
             U64 isPromoting = turn ? (toBB & RANK_8) : (toBB & RANK_1);
 
             if (isPromoting) {
@@ -641,7 +664,7 @@ int pseudoMoves(Board *board, Move moves[]) {
     return length;
 }
 
-int legalMoves(Board *board, Move legal[]) {
+int legalMovesSlow(Board *board, Move legal[]) {
     Move pseudo[MAX_MOVES];
     int count = pseudoMoves(board, pseudo);
 
@@ -655,7 +678,7 @@ int legalMoves(Board *board, Move legal[]) {
         U64 kingBB = board->kingBB & (board->turn ? board->blackBB : board->whiteBB);
 
         if (!kingBB) continue;
-        int kingSq = __builtin_ctzll(kingBB);
+        int kingSq = LSB(kingBB);
 
         if (!isSquareAttacked(board, kingSq, board->turn)) legal[legalCount++] = pseudo[i];
 
@@ -663,6 +686,187 @@ int legalMoves(Board *board, Move legal[]) {
     }
 
     return legalCount;
+}
+
+/* ---------------------------------------------------------------------
+ * Fast legal move generation: computes checkers and pinned pieces once
+ * (both O(1) via magic bitboards + BETWEEN/LINE lookups), then builds
+ * moves directly instead of generating everything and testing each one
+ * with a doMove/isSquareAttacked/undoMove cycle. That old approach is
+ * kept above as legalMovesSlow for reference/benchmarking.
+ *
+ * The one case that still needs a make/unmake check is en passant: a
+ * capture can expose the king along a rank even when neither pawn was
+ * individually pinned (both blockers between king and rook vanish at
+ * once). That's rare enough that a full check there costs nothing.
+ * ------------------------------------------------------------------- */
+
+static U64 computeCheckers(Board *b, int kingSq, int us, U64 occ) {
+    U64 enemy = us ? b->blackBB : b->whiteBB;
+    U64 checkers = 0ULL;
+
+    checkers |= PAWN_ATTACKS[us][kingSq] & b->pawnBB & enemy;
+    checkers |= KNIGHT_REF[kingSq] & b->knightBB & enemy;
+    checkers |= getBishopAttacks(kingSq, occ) & (b->bishopBB | b->queenBB) & enemy;
+    checkers |= getRookAttacks(kingSq, occ)   & (b->rookBB   | b->queenBB) & enemy;
+
+    return checkers;
+}
+
+static U64 computePinned(Board *b, int kingSq, int us, U64 occ) {
+    U64 own   = us ? b->whiteBB : b->blackBB;
+    U64 enemy = us ? b->blackBB : b->whiteBB;
+    U64 enemyDiag = enemy & (b->bishopBB | b->queenBB);
+    U64 enemyOrth = enemy & (b->rookBB   | b->queenBB);
+
+    U64 pinned = 0ULL;
+
+    U64 diagFromKing = getBishopAttacks(kingSq, occ);
+    U64 possibleDiagBlockers = diagFromKing & own;
+    U64 xrayDiag = getBishopAttacks(kingSq, occ ^ possibleDiagBlockers) & enemyDiag & ~diagFromKing;
+    while (xrayDiag) {
+        int pinnerSq = POP_LSB(xrayDiag);
+        pinned |= BETWEEN[kingSq][pinnerSq] & own;
+    }
+
+    U64 orthFromKing = getRookAttacks(kingSq, occ);
+    U64 possibleOrthBlockers = orthFromKing & own;
+    U64 xrayOrth = getRookAttacks(kingSq, occ ^ possibleOrthBlockers) & enemyOrth & ~orthFromKing;
+    while (xrayOrth) {
+        int pinnerSq = POP_LSB(xrayOrth);
+        pinned |= BETWEEN[kingSq][pinnerSq] & own;
+    }
+
+    return pinned;
+}
+
+int legalMoves(Board *board, Move legal[]) {
+    int length = 0;
+    int turn = board->turn;
+    U64 own   = turn ? board->whiteBB : board->blackBB;
+    U64 enemy = turn ? board->blackBB : board->whiteBB;
+    U64 occ   = own | enemy;
+    int kingSq = LSB(board->kingBB & own);
+
+    U64 checkers = computeCheckers(board, kingSq, turn, occ);
+    int numCheckers = BITS(checkers);
+
+    /* King moves: always generated. Use occupancy with the king removed
+     * so a slider "sees through" the square the king is vacating -
+     * otherwise the king could illegally step straight back along a
+     * checking ray. */
+    U64 occNoKing = occ & ~BIT(kingSq);
+    U64 kingMoves = KING_REF[kingSq] & ~own;
+    while (kingMoves) {
+        int to = POP_LSB(kingMoves);
+        if (!isSquareAttackedWithOcc(board, to, !turn, occNoKing))
+            legal[length++] = ENCODE_MOVE(kingSq, to, KING+turn*6, EMPTY_FLAG);
+    }
+
+    if (numCheckers >= 2) return length; /* double check: only the king can move */
+
+    U64 checkMask = ~0ULL;
+    if (numCheckers == 1) {
+        int checkerSq = LSB(checkers);
+        checkMask = BETWEEN[kingSq][checkerSq] | BIT(checkerSq);
+    }
+
+    U64 pinned = computePinned(board, kingSq, turn, occ);
+
+    /* Pawns */
+    U64 pawnBB = board->pawnBB & own;
+    while (pawnBB) {
+        int sq = POP_LSB(pawnBB);
+        U64 rawMoves = getPawnMoves(sq, board, turn);
+
+        /* En passant is special-cased *before* checkMask/pin filtering:
+         * capturing en passant removes the checking/pinning pawn from
+         * its actual square, but the move's "to" square is the empty
+         * square behind it - which checkMask (built from the checker's
+         * own square) and a file/rank pin ray wouldn't recognize as
+         * resolving anything. So this one move type always gets the
+         * full make/unmake legality check instead of the fast masks. */
+        if (board->enp >= 0 && (rawMoves & BIT(board->enp))) {
+            Move m = ENCODE_MOVE(sq, board->enp, PAWN+turn*6, EMPTY_FLAG);
+            Undo undo;
+            doMove(board, m, &undo);
+            U64 kbb = board->kingBB & (board->turn ? board->blackBB : board->whiteBB);
+            bool safe = !isSquareAttacked(board, LSB(kbb), board->turn);
+            undoMove(board, m, &undo);
+            if (safe) legal[length++] = m;
+
+            rawMoves &= ~BIT(board->enp); /* don't also handle it below */
+        }
+
+        U64 allowed = checkMask;
+        if (pinned & BIT(sq)) allowed &= LINE[kingSq][sq];
+        U64 moves = rawMoves & allowed;
+
+        while (moves) {
+            int to = POP_LSB(moves);
+            U64 toBB = BIT(to);
+
+            U64 isPromoting = turn ? (toBB & RANK_8) : (toBB & RANK_1);
+            if (isPromoting) {
+                legal[length++] = ENCODE_MOVE(sq, to, PAWN+turn*6, QUEEN_PROMO_FLAG);
+                legal[length++] = ENCODE_MOVE(sq, to, PAWN+turn*6, KNIGHT_PROMO_FLAG);
+                legal[length++] = ENCODE_MOVE(sq, to, PAWN+turn*6, ROOK_PROMO_FLAG);
+                legal[length++] = ENCODE_MOVE(sq, to, PAWN+turn*6, BISHOP_PROMO_FLAG);
+            } else {
+                legal[length++] = ENCODE_MOVE(sq, to, PAWN+turn*6, EMPTY_FLAG);
+            }
+        }
+    }
+
+    /* Knights: a pinned knight can never move without breaking the pin,
+     * so skip pinned knights outright. */
+    U64 knightBB = board->knightBB & own & ~pinned;
+    while (knightBB) {
+        int sq = POP_LSB(knightBB);
+        U64 moves = KNIGHT_REF[sq] & ~own & checkMask;
+        while (moves) { int to = POP_LSB(moves); legal[length++] = ENCODE_MOVE(sq, to, KNIGHT+turn*6, EMPTY_FLAG); }
+    }
+
+    /* Bishops */
+    U64 bishopBB = board->bishopBB & own;
+    while (bishopBB) {
+        int sq = POP_LSB(bishopBB);
+        U64 moves = getBishopAttacks(sq, occ) & ~own & checkMask;
+        if (pinned & BIT(sq)) moves &= LINE[kingSq][sq];
+        while (moves) { int to = POP_LSB(moves); legal[length++] = ENCODE_MOVE(sq, to, BISHOP+turn*6, EMPTY_FLAG); }
+    }
+
+    /* Rooks */
+    U64 rookBB = board->rookBB & own;
+    while (rookBB) {
+        int sq = POP_LSB(rookBB);
+        U64 moves = getRookAttacks(sq, occ) & ~own & checkMask;
+        if (pinned & BIT(sq)) moves &= LINE[kingSq][sq];
+        while (moves) { int to = POP_LSB(moves); legal[length++] = ENCODE_MOVE(sq, to, ROOK+turn*6, EMPTY_FLAG); }
+    }
+
+    /* Queens */
+    U64 queenBB = board->queenBB & own;
+    while (queenBB) {
+        int sq = POP_LSB(queenBB);
+        U64 moves = (getRookAttacks(sq, occ) | getBishopAttacks(sq, occ)) & ~own & checkMask;
+        if (pinned & BIT(sq)) moves &= LINE[kingSq][sq];
+        while (moves) { int to = POP_LSB(moves); legal[length++] = ENCODE_MOVE(sq, to, QUEEN+turn*6, EMPTY_FLAG); }
+    }
+
+    /* Castling: cannot happen while in check, canCastle() already checks
+     * that plus the king's start/path/landing squares for attacks. */
+    if (numCheckers == 0) {
+        int right[4] = { K, Q, k, q };
+        int moveTo[4] = { G1, C1, G8, C8 };
+        for (int i = 0; i < 4; i++) {
+            if (canCastle(board, right[i], occ)) {
+                legal[length++] = ENCODE_MOVE(kingSq, moveTo[i], right[i], CASTLE_FLAG);
+            }
+        }
+    }
+
+    return length;
 }
 
 void makeMove(Board *board, Move move) {

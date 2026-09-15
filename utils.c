@@ -109,17 +109,17 @@ void printChessboard(Board b) {
             int sq = rank * 8 + file;
             char piece = '.';
 
-            if (GET_BIT(b.pawnBB, sq))        
+            if (GET_BIT(b.pawnBB, sq))
                 piece = GET_BIT(b.whiteBB, sq) ? 'P' : 'p' ;
-            else if (GET_BIT(b.knightBB, sq)) 
+            else if (GET_BIT(b.knightBB, sq))
                 piece = GET_BIT(b.whiteBB, sq) ? 'N' : 'n' ;
-            else if (GET_BIT(b.bishopBB, sq)) 
+            else if (GET_BIT(b.bishopBB, sq))
                 piece = GET_BIT(b.whiteBB, sq) ? 'B' : 'b' ;
-            else if (GET_BIT(b.rookBB, sq))   
+            else if (GET_BIT(b.rookBB, sq))
                 piece = GET_BIT(b.whiteBB, sq) ? 'R' : 'r' ;
-            else if (GET_BIT(b.queenBB, sq))  
+            else if (GET_BIT(b.queenBB, sq))
                 piece = GET_BIT(b.whiteBB, sq) ? 'Q' : 'q' ;
-            else if (GET_BIT(b.kingBB, sq))   
+            else if (GET_BIT(b.kingBB, sq))
                 piece = GET_BIT(b.whiteBB, sq) ? 'K' : 'k' ;
 
             printf("%c ", piece);
@@ -128,7 +128,7 @@ void printChessboard(Board b) {
     }
     printf("   a b c d e f g h\n");
 
-    printf("\nTurn: %s\n", b.turn == WHITE ? "WHITE" : "BLACK");
+    printf("\nTurn: %s\n", b.turn ? "WHITE" : "BLACK");
 
     printf("Castling: ");
     if (b.castle == 0) printf("-");
@@ -139,7 +139,7 @@ void printChessboard(Board b) {
     printf("\n");
 
     if (b.enp != -1) printf("En passant: %c%d\n", 'a' + (b.enp % 8), 1 + (b.enp / 8));
-    else                   printf("En passant: -\n");
+    else printf("En passant: -\n");
 
     printf("Halfmove: %d\n", b.halfmove);
     printf("Fullmove: %d\n", b.fullmove);
@@ -165,4 +165,20 @@ void ppBB(U64 bb, int s, int p) {
         printf("\n");
     }
     printf("\n");
+}
+
+void prettyBB(U64 bb, int s, char p) {
+    printf("+---+---+---+---+---+---+---+---+\n");
+    for (int rank = 7; rank >= 0; rank--) {
+        for (int file = 0; file < 8; file++) {
+            int sq = rank * 8 + file;
+            if (sq == s)
+                printf("| %c ", p);
+            else
+                printf("| %c ", (bb & (1ULL << sq)) ? 'X' : ' ');
+        }
+        printf("| %d\n", rank + 1);
+        printf("+---+---+---+---+---+---+---+---+\n");
+    }
+    printf("  a   b   c   d   e   f   g   h\n");
 }

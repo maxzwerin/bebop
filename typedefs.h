@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <stdbool.h>
 
 /*    LITTLE ENDIAN RANK-FILE MAPPING
       ┌────┬────┬────┬────┬────┬────┬────┬────┐
@@ -28,12 +29,6 @@
 
 #define MAX_MOVES 218 // Maximum possible number of moves in any position
 
-#define BLACK 0
-#define WHITE 1
-
-#define false 0
-#define true 1
-
 typedef uint64_t U64;
 
 typedef struct {
@@ -56,9 +51,9 @@ typedef struct {
 } Board;
 
 typedef struct {
-    int capture; // Captured piece
-    int enp;     // Previous en passant square
-    int castle;  // Previous castling rights
+    int capture;  // Captured piece
+    int enp;      // Previous en passant square
+    int castle;   // Previous castling rights
 } Undo;
 
 enum PIECE { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING };
@@ -68,28 +63,35 @@ enum PIECES {
     PAWN_W, KNIGHT_W, BISHOP_W, ROOK_W, QUEEN_W, KING_W
 };
 
-/* fun bit stuff to get castling rights
+/* fun bit stuff to get castling rights -
  * K  = 0b0001  |  k  = 0b0100
  * Q  = 0b0010  |  q  = 0b1000
  * KQ = 0b0011  |  kq = 0b1100  */
 enum CASTLING {K=1, Q=2, k=4, q=8, KQ=3, kq=12};
 
+typedef uint32_t Move;
 /* from     + 6 bits | 0-63 board position
  * to       + 6 bits | 0-63 board position
  * piece    + 4 bits | piece
  * flag     + 4 bits | determines how flag is encoded
  * --------------------------------
  *           20 !! room to spare !! */
-typedef uint32_t Move;
 
-#define EMPTY_FLAG 0
-#define CASTLE_FLAG 1
-#define CAPTURE_FLAG 4
-#define PROMO_FLAG 8
-#define KNIGHT_PROMO_FLAG 8
-#define ROOK_PROMO_FLAG 9
-#define BISHOP_PROMO_FLAG 10
-#define QUEEN_PROMO_FLAG 11
+/* move encoding specifics -
+ * Regular move:  ENCODE_MOVE(from, to, [?]+turn*6, EMPTY_FLAG);
+ * Promotion:     ENCODE_MOVE(from, to, PAWN+turn*6, [?]_PROMO_FLAG);
+ * Castling king: ENCODE_MOVE(from, to, K/Q/k/q, CASTLE_FLAG);
+ *                we can use king move position in place of the piece
+ *                position because of the castle flag. joy!
+ * no need for enp flag!! this is handled in the Board state */
+#define EMPTY_FLAG 0         // 0000
+#define CASTLE_FLAG 1        // 0001
+#define CAPTURE_FLAG 4       // 0100
+#define PROMO_FLAG 8         // 1000
+#define KNIGHT_PROMO_FLAG 8  // 1000
+#define ROOK_PROMO_FLAG 9    // 1001
+#define BISHOP_PROMO_FLAG 10 // 1010
+#define QUEEN_PROMO_FLAG 11  // 1011
 
 #define ENCODE_MOVE(from, to, piece, flag) \
     (((from) & 0x3f) | (((to) & 0x3f) << 6) | (((piece) & 0xf) << 12) | (((flag) & 0xf) << 16))
@@ -105,15 +107,21 @@ typedef uint32_t Move;
 
 #define SWITCH_SIDE(x) (x->turn ^= 1)
 
-#define POP_LSB(bb) ({              \
-    int sq = __builtin_ctzll(bb);   \
-    bb &= bb - 1;                   \
-    sq;                             \
+#define EMPTY_BIT 0ULL
+#define BIT(sq) (1ULL << (sq))
+
+#define LSB(x) (__builtin_ctzll(x))
+#define BITS(x) (__builtin_popcountll(x))
+
+#define POP_LSB(bb) ({            \
+    int sq = __builtin_ctzll(bb); \
+    bb &= bb - 1;                 \
+    sq;                           \
 })
 
 #define START_FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-enum SQUARES { 
+enum SQUARES {
     A1, B1, C1, D1, E1, F1, G1, H1,
     A2, B2, C2, D2, E2, F2, G2, H2,
     A3, B3, C3, D3, E3, F3, G3, H3,
