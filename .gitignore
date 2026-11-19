@@ -1,2 +1,4 @@
+lichess-bot/
 compile_commands.json
 .cache
+.venv

@@ -1,4 +1,5 @@
 #include "bot.h"
+#include "bebop.h"
 #include <time.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -333,6 +334,11 @@ static Move g_killers[MAX_PLY][2];
 static bool g_killerValid[MAX_PLY][2];
 static U64 g_searchHashes[MAX_PLY];
 
+/* Set for the duration of a search by iterativeDeepen(); lets an external
+ * driver (e.g. the UCI "stop" command) cancel a search that has no fixed
+ * time budget (UCI "go infinite"/"go depth"). NULL when not applicable. */
+static const volatile bool *g_externalStop = NULL;
+
 /* Called after a hypothetical move has been made. The real game history does
  * not yet contain this search position, so count prior real-game occurrences
  * plus earlier positions on the current search line. If there are already two,
@@ -423,6 +429,7 @@ static void rememberKiller(Move move, int ply) {
 }
 
 static bool timeExpired(void) {
+    if (g_externalStop && *g_externalStop) { g_timeUp = true; return true; }
     if ((g_nodes++ & 255) == 0 && nowMs() >= g_deadlineMs) g_timeUp = true;
     return g_timeUp;
 }
@@ -560,31 +567,44 @@ static int negamax(Board *board, int depth, int alpha, int beta, int ply,
     return bestScore;
 }
 
-static Move bebopBot(Board *board, Move legal[], int legalCount,
-                            double timeLeftMs, double incMs,
-                            const BotContext *context) {
+/*
+ * Shared iterative-deepening driver used both by the self-play bot and by
+ * bebopSearch() (the direct entry point UCI uses). Searches depth 1, 2, 3...
+ * up to maxDepth, stopping early once budgetMs elapses or *stopFlag is set,
+ * and always returns the best move found by the last depth that completed
+ * normally (a depth that is cut off mid-search is discarded).
+ */
+static Move iterativeDeepen(Board *board, Move legal[], int legalCount,
+                            double budgetMs, int maxDepth,
+                            const volatile bool *stopFlag,
+                            const BotContext *context,
+                            BebopSearchInfo *infoOut) {
     if (!g_tablesReady) initEvalTables();
     if (legalCount <= 0) return 0;
+
+    if (infoOut) {
+        infoOut->depthCompleted = 0;
+        infoOut->scoreCp = 0;
+        infoOut->isMate = false;
+        infoOut->mateInMoves = 0;
+        infoOut->nodes = 0;
+    }
+
     if (legalCount == 1) return legal[0];
 
-    /* Keep a larger safety margin than the baseline and scale with the clock. */
-    double safeTime = timeLeftMs > 0.0 ? timeLeftMs : 0.1;
-    double budget = safeTime / 28.0 + (incMs > 0.0 ? incMs * 0.70 : 0.0);
-    double cap = safeTime * 0.12;
-    if (budget > cap) budget = cap;
-    if (budget > 300.0) budget = 300.0;
-    double minimumBudget = safeTime < 2.0 ? safeTime * 0.05 : 0.2;
-    if (budget < minimumBudget) budget = minimumBudget;
+    if (maxDepth <= 0 || maxDepth > 32) maxDepth = 32;
 
-    g_deadlineMs = nowMs() + budget;
+    g_deadlineMs = nowMs() + budgetMs;
     g_timeUp = false;
     g_nodes = 0;
+    g_externalStop = stopFlag;
     memset(g_killerValid, 0, sizeof(g_killerValid));
 
     Move bestMove = legal[0];
     int previousScore = 0;
+    int completedDepth = 0;
 
-    for (int depth = 1; depth <= 32; ++depth) {
+    for (int depth = 1; depth <= maxDepth; ++depth) {
         Move depthBest = bestMove;
         int score;
 
@@ -618,11 +638,59 @@ static Move bebopBot(Board *board, Move legal[], int legalCount,
         if (g_timeUp) break;
         bestMove = depthBest;
         previousScore = score;
+        completedDepth = depth;
         if (abs(score) >= MATE_SCORE - 1000) break;
         if (nowMs() >= g_deadlineMs) break;
     }
 
+    g_externalStop = NULL;
+
+    if (infoOut) {
+        infoOut->depthCompleted = completedDepth;
+        infoOut->nodes = g_nodes;
+        if (abs(previousScore) >= MATE_SCORE - 1000) {
+            int pliesToMate = MATE_SCORE - abs(previousScore);
+            int movesToMate = (pliesToMate + 1) / 2;
+            infoOut->isMate = true;
+            infoOut->mateInMoves = previousScore > 0 ? movesToMate : -movesToMate;
+            infoOut->scoreCp = previousScore;
+        } else {
+            infoOut->isMate = false;
+            infoOut->scoreCp = previousScore;
+        }
+    }
+
     return bestMove;
+}
+
+static Move bebopBot(Board *board, Move legal[], int legalCount,
+                            double timeLeftMs, double incMs,
+                            const BotContext *context) {
+    if (legalCount <= 0) return 0;
+    if (legalCount == 1) return legal[0];
+
+    /* Keep a larger safety margin than the baseline and scale with the clock.
+     * This self-play heuristic is intentionally bullet-fast (capped at
+     * 300ms) so engine-vs-engine matches run quickly; bebopSearch() below
+     * is used instead when a caller (UCI) wants to supply its own budget. */
+    double safeTime = timeLeftMs > 0.0 ? timeLeftMs : 0.1;
+    double budget = safeTime / 28.0 + (incMs > 0.0 ? incMs * 0.70 : 0.0);
+    double cap = safeTime * 0.12;
+    if (budget > cap) budget = cap;
+    if (budget > 300.0) budget = 300.0;
+    double minimumBudget = safeTime < 2.0 ? safeTime * 0.05 : 0.2;
+    if (budget < minimumBudget) budget = minimumBudget;
+
+    return iterativeDeepen(board, legal, legalCount, budget, 32, NULL, context, NULL);
+}
+
+Move bebopSearch(Board *board, Move legal[], int legalCount,
+                 double budgetMs, int maxDepth,
+                 const volatile bool *stopFlag,
+                 const BotContext *context,
+                 BebopSearchInfo *infoOut) {
+    return iterativeDeepen(board, legal, legalCount, budgetMs, maxDepth,
+                           stopFlag, context, infoOut);
 }
 
 REGISTER_BOT("bebop", bebopBot);

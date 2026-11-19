@@ -1,45 +1,34 @@
 CC = gcc
 
 CFLAGS = -O3 -Wall -Wextra -Iinclude
-LDFLAGS =
 
 RAYLIB_CFLAGS := $(shell pkg-config --cflags raylib)
 RAYLIB_LIBS   := $(shell pkg-config --libs raylib)
 
-CFLAGS += $(RAYLIB_CFLAGS) -pthread
-LDLIBS += $(RAYLIB_LIBS) -pthread
-
-BUILD = build
-
 ENGINE_SRC = \
-    src/engine/movegen.c \
-    src/engine/utils.c \
-    src/engine/zobrist.c
+    movegen.c \
+    utils.c \
+    zobrist.c
 
 GAME_SRC = \
-    src/game/game.c \
-    src/game/pgn.c
-
-GUI_SRC = \
-    src/gui/gui.c
+    game.c \
+    pgn.c
 
 BOT_SRC = \
-    src/bots/bot_registry.c \
-    $(wildcard bots/*.c)
+    bot_registry.c \
+    bebop.c
+
+UCI_SRC = \
+    uci.c
 
 MAIN_SRC = src/main.c
 
-ALL_SRC = $(ENGINE_SRC) $(GAME_SRC) $(GUI_SRC) $(BOT_SRC)
+ALL_SRC = $(ENGINE_SRC) $(GAME_SRC) $(BOT_SRC) $(UCI_SRC)
 
-.PHONY: all clean perft
+.PHONY: all clean perft uci
 
-all: $(BUILD)/chessmatch
-
-$(BUILD):
-	mkdir -p $(BUILD)
-
-$(BUILD)/chessmatch: $(ALL_SRC) $(MAIN_SRC) | $(BUILD)
-	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
+uci: $(ALL_SRC) $(MAIN_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) -pthread $^ -o $@ $(LDFLAGS) -pthread
 
 perft: $(ENGINE_SRC) perft.c | $(BUILD)
 	$(CC) $(CFLAGS) $^ -o $(BUILD)/perft $(LDFLAGS) -lm
