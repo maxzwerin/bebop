@@ -14,10 +14,16 @@
 
 #define _POSIX_C_SOURCE 200809L
 
-#include "game.h"   /* Board, Move, BotContext, MAX_GAME_PLIES, setFen, ... */
-#include "bebop.h"  /* bebopSearch() */
+#include "board.h"
+#include "movegen.h"
+#include "perft.h"
+#include "search.h"
+#include "zobrist.h"
 
 #include <pthread.h>
+#include <stdatomic.h>
+#include <inttypes.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,7 +36,7 @@ static double nowMsUci(void) {
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
 }
 
-#define UCI_MAX_HISTORY (MAX_GAME_PLIES + 64)
+#define UCI_MAX_HISTORY 2048
 
 static Board g_board;
 static U64 g_history[UCI_MAX_HISTORY];
@@ -38,13 +44,13 @@ static int g_historyLen;
 
 static pthread_t g_searchThread;
 static int g_searchRunning = 0;
-static volatile bool g_stopRequested = false;
+static atomic_bool g_stopRequested = ATOMIC_VAR_INIT(false);
 
 /* Parameters handed to the search thread by handleGo(). */
 static double g_goBudgetMs;
 static int g_goMaxDepth;
 
-/* ---- small helpers mirroring main.c's move <-> UCI-string conversion ---- */
+/* ---- small helpers for move <-> UCI-string conversion ---- */
 
 static char promotionSuffix(int flag) {
     if (!IS_PROMO(flag)) return '\0';
@@ -74,12 +80,16 @@ static void moveToUciStr(Move move, char out[6]) {
 
 static void pushHistory(void) {
     U64 hash = zobristHash(&g_board);
-    if (g_historyLen < UCI_MAX_HISTORY) g_history[g_historyLen++] = hash;
-    else g_history[UCI_MAX_HISTORY - 1] = hash;
+    if (g_historyLen == UCI_MAX_HISTORY) {
+        memmove(g_history, g_history + 1,
+                (UCI_MAX_HISTORY - 1) * sizeof(g_history[0]));
+        --g_historyLen;
+    }
+    g_history[g_historyLen++] = hash;
 }
 
 static void resetGame(void) {
-    setFen(&g_board, (char *)START_FEN);
+    boardSetFen(&g_board, START_FEN);
     g_historyLen = 0;
     pushHistory();
 }
@@ -127,15 +137,14 @@ static void *searchThreadMain(void *arg) {
         return NULL;
     }
 
-    BotContext context = {
+    SearchContext context = {
         .positionHistory = g_history,
-        .positionHistoryCount = g_historyLen,
-        .positionHash = zobristHash
+        .positionHistoryCount = g_historyLen
     };
 
     double t0 = nowMsUci();
-    BebopSearchInfo info;
-    Move best = bebopSearch(&g_board, legal, legalCount,
+    SearchInfo info;
+    Move best = searchBestMove(&g_board, legal, legalCount,
                             g_goBudgetMs, g_goMaxDepth,
                             &g_stopRequested, &context, &info);
     double elapsedMs = nowMsUci() - t0;
@@ -161,7 +170,7 @@ static void *searchThreadMain(void *arg) {
  * no search is running. */
 static void stopSearchAndWait(void) {
     if (!g_searchRunning) return;
-    g_stopRequested = true;
+    atomic_store_explicit(&g_stopRequested, true, memory_order_relaxed);
     pthread_join(g_searchThread, NULL);
     g_searchRunning = 0;
 }
@@ -185,7 +194,7 @@ static void handlePosition(char *args) {
             strncat(fen, tok, sizeof(fen) - strlen(fen) - 1);
             first = 0;
         }
-        setFen(&g_board, fen);
+        boardSetFen(&g_board, fen);
         g_historyLen = 0;
         pushHistory();
     } else {
@@ -206,6 +215,22 @@ static void handleGo(char *args) {
 
     char *saveptr;
     char *tok = strtok_r(args, " \t", &saveptr);
+    if (tok && strcmp(tok, "perft") == 0) {
+        char *depthToken = strtok_r(NULL, " \t", &saveptr);
+        char *extra = strtok_r(NULL, " \t", &saveptr);
+        char *end = NULL;
+        errno = 0;
+        long perftDepth = depthToken ? strtol(depthToken, &end, 10) : -1;
+        if (!depthToken || !*depthToken || !end || *end != '\0' || errno ||
+            extra || perftDepth < 0 || perftDepth > 20) {
+            printf("info string invalid go perft depth (expected 0..20)\n");
+        } else {
+            uint64_t nodes = perftNodes(&g_board, (int)perftDepth);
+            printf("Nodes: %" PRIu64 "\n", nodes);
+        }
+        fflush(stdout);
+        return;
+    }
     while (tok) {
         if      (!strcmp(tok, "wtime"))    { tok = strtok_r(NULL, " \t", &saveptr); if (tok) wtime = atof(tok); }
         else if (!strcmp(tok, "btime"))    { tok = strtok_r(NULL, " \t", &saveptr); if (tok) btime = atof(tok); }
@@ -233,9 +258,8 @@ static void handleGo(char *args) {
         double incMs = g_board.turn ? winc : binc;
         double safeTime = timeLeftMs > 0 ? timeLeftMs : 0.1;
 
-        /* Same shape as the self-play heuristic in bebop.c, but without
-         * its 300ms self-play cap: under a real UCI time control we want
-         * bebop to use the time it's actually given. */
+        /* Allocate a small fraction of the remaining clock plus most of
+         * the increment, with a hard cap to preserve time for later moves. */
         budgetMs = safeTime / 28.0 + (incMs > 0 ? incMs * 0.70 : 0.0);
         double cap = safeTime * 0.33;
         if (budgetMs > cap) budgetMs = cap;
@@ -244,9 +268,16 @@ static void handleGo(char *args) {
 
     g_goBudgetMs = budgetMs;
     g_goMaxDepth = maxDepth;
-    g_stopRequested = false;
+    atomic_store_explicit(&g_stopRequested, false, memory_order_relaxed);
+    int err = pthread_create(&g_searchThread, NULL, searchThreadMain, NULL);
+    if (err != 0) {
+        g_searchRunning = 0;
+        printf("info string could not start search thread: %s\n", strerror(err));
+        printf("bestmove 0000\n");
+        fflush(stdout);
+        return;
+    }
     g_searchRunning = 1;
-    pthread_create(&g_searchThread, NULL, searchThreadMain, NULL);
 }
 
 /* --------------------------------- main loop ------------------------------ */
@@ -295,9 +326,6 @@ int runUci(void) {
             stopSearchAndWait();
             break;
         }
-        /* "setoption ...", "debug ...", "ponderhit", unknown commands:
-         * acknowledged by doing nothing, per the UCI spec's tolerance for
-         * unrecognized input. */
     }
 
     stopSearchAndWait();

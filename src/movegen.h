@@ -1,7 +1,7 @@
 #ifndef MOVEGEN_H
 #define MOVEGEN_H
 
-#include "utils.h"
+#include "typedefs.h"
 
 extern U64 KNIGHT_REF[64];
 extern U64 KING_REF[64];
@@ -26,7 +26,6 @@ void undoMove(Board *board, Move move, Undo *undo);
 void makeMove(Board *board, Move move);
 
 bool canCastle(Board *board, int right, U64 occ);
-int pseudoMoves(Board *board, Move moves[]);
 int legalMoves(Board *board, Move legal[]);
 
 #endif

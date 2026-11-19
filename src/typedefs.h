@@ -2,9 +2,6 @@
 #define TYPEDEF_H
 
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <assert.h>
 #include <stdbool.h>
 
 /*    LITTLE ENDIAN RANK-FILE MAPPING

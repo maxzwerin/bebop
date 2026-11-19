@@ -1,37 +1,42 @@
-CC = gcc
+CC ?= cc
 
-CFLAGS = -O3 -Wall -Wextra -Iinclude
+TARGET := bebop
 
-RAYLIB_CFLAGS := $(shell pkg-config --cflags raylib)
-RAYLIB_LIBS   := $(shell pkg-config --libs raylib)
+CPPFLAGS += -Isrc
+CFLAGS ?= -O3 -std=c11 -Wall -Wextra
+LDFLAGS ?=
+LDLIBS += -pthread -lm
 
-ENGINE_SRC = \
-    movegen.c \
-    utils.c \
-    zobrist.c
+SOURCES := \
+	src/main.c \
+	src/uci.c \
+	src/search.c \
+	src/movegen.c \
+	src/board.c \
+	src/zobrist.c \
+	src/perft.c
+HEADERS := $(wildcard src/*.h)
 
-GAME_SRC = \
-    game.c \
-    pgn.c
+.PHONY: all uci perft test mate-test clean
 
-BOT_SRC = \
-    bot_registry.c \
-    bebop.c
+all: $(TARGET)
+	@rm -f *.o *.d src/*.o src/*.d
 
-UCI_SRC = \
-    uci.c
+$(TARGET): $(SOURCES) $(HEADERS)
+	@rm -f *.o *.d src/*.o src/*.d
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(SOURCES) $(LDLIBS)
+	@rm -f *.o *.d src/*.o src/*.d
 
-MAIN_SRC = src/main.c
+uci: all
+	./$(TARGET)
 
-ALL_SRC = $(ENGINE_SRC) $(GAME_SRC) $(BOT_SRC) $(UCI_SRC)
+perft: all
+	./tests/perft.sh
 
-.PHONY: all clean perft uci
+mate-test: all
+	./tests/mate-in-1.sh
 
-uci: $(ALL_SRC) $(MAIN_SRC) | $(BUILD)
-	$(CC) $(CFLAGS) -pthread $^ -o $@ $(LDFLAGS) -pthread
-
-perft: $(ENGINE_SRC) perft.c | $(BUILD)
-	$(CC) $(CFLAGS) $^ -o $(BUILD)/perft $(LDFLAGS) -lm
+test: perft mate-test
 
 clean:
-	rm -rf $(BUILD)
+	rm -f $(TARGET) *.o *.d src/*.o src/*.d

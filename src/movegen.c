@@ -577,123 +577,12 @@ bool canCastle(Board *board, int right, U64 occ) {
     return true;
 }
 
-int pseudoMoves(Board *board, Move moves[]) {
-    int length = 0;
-
-    int turn = board->turn;
-    U64 pawnBB   = board->pawnBB   & (turn ? board->whiteBB : board->blackBB);
-    U64 knightBB = board->knightBB & (turn ? board->whiteBB : board->blackBB);
-    U64 rookBB   = board->rookBB   & (turn ? board->whiteBB : board->blackBB);
-    U64 bishopBB = board->bishopBB & (turn ? board->whiteBB : board->blackBB);
-    U64 queenBB  = board->queenBB  & (turn ? board->whiteBB : board->blackBB);
-    U64 kingBB   = board->kingBB   & (turn ? board->whiteBB : board->blackBB);
-
-    U64 friendly  = turn ? board->whiteBB : board->blackBB;
-    // U64 enemy = turn ? board->blackBB : board->whiteBB;
-    U64 occupancy = board->whiteBB | board->blackBB;
-    int kingSq = LSB(kingBB);
-
-    U64 attackMask = 0ULL;
-
-    while (pawnBB) {
-        int sq = POP_LSB(pawnBB);
-        attackMask = getPawnMoves(sq, board, turn);
-
-        while (attackMask) {
-            int to = POP_LSB(attackMask);
-            U64 toBB = BIT(to);
-            U64 isPromoting = turn ? (toBB & RANK_8) : (toBB & RANK_1);
-
-            if (isPromoting) {
-                moves[length++] = ENCODE_MOVE(sq, to, PAWN+turn*6, QUEEN_PROMO_FLAG);
-                moves[length++] = ENCODE_MOVE(sq, to, PAWN+turn*6, KNIGHT_PROMO_FLAG);
-                moves[length++] = ENCODE_MOVE(sq, to, PAWN+turn*6, ROOK_PROMO_FLAG);
-                moves[length++] = ENCODE_MOVE(sq, to, PAWN+turn*6, BISHOP_PROMO_FLAG);
-            } else {
-                moves[length++] = ENCODE_MOVE(sq, to, PAWN+turn*6, EMPTY_FLAG);
-            }
-        }
-    }
-    while (knightBB) {
-        int sq = POP_LSB(knightBB);
-        attackMask = KNIGHT_REF[sq] & ~friendly;
-        while (attackMask) {
-            int to = POP_LSB(attackMask);
-            moves[length++] = ENCODE_MOVE(sq, to, KNIGHT+turn*6, EMPTY_FLAG);
-        }
-    }
-    while (rookBB) {
-        int sq = POP_LSB(rookBB);
-        attackMask = getRookAttacks(sq, occupancy) & ~friendly;
-        while (attackMask) {
-            int to = POP_LSB(attackMask);
-            moves[length++] = ENCODE_MOVE(sq, to, ROOK+turn*6, EMPTY_FLAG);
-        }
-    }
-    while (bishopBB) {
-        int sq = POP_LSB(bishopBB);
-        attackMask = getBishopAttacks(sq, occupancy) & ~friendly;
-        while (attackMask) {
-            int to = POP_LSB(attackMask);
-            moves[length++] = ENCODE_MOVE(sq, to, BISHOP+turn*6, EMPTY_FLAG);
-        }
-    }
-    while (queenBB) {
-        int sq = POP_LSB(queenBB);
-        attackMask = (getRookAttacks(sq, occupancy) | getBishopAttacks(sq, occupancy)) & ~friendly;
-        while (attackMask) {
-            int to = POP_LSB(attackMask);
-            moves[length++] = ENCODE_MOVE(sq, to, QUEEN+turn*6, EMPTY_FLAG);
-        }
-    }
-
-    attackMask = KING_REF[kingSq] & ~friendly;
-    while (attackMask) {
-        int to = POP_LSB(attackMask);
-        moves[length++] = ENCODE_MOVE(kingSq, to, KING+turn*6, EMPTY_FLAG);
-    }
-
-    int right[4] = { K, Q, k, q };
-    int moveTo[4] = { G1, C1, G8, C8 };
-    for (int i = 0; i < 4; i++) {
-        if (canCastle(board, right[i], occupancy)) {
-            moves[length++] = ENCODE_MOVE(kingSq, moveTo[i], right[i], CASTLE_FLAG);
-        }
-    }
-
-    return length;
-}
-
-int legalMovesSlow(Board *board, Move legal[]) {
-    Move pseudo[MAX_MOVES];
-    int count = pseudoMoves(board, pseudo);
-
-    int legalCount = 0;
-
-    for (int i = 0; i < count; i++) {
-        Undo undo;
-
-        doMove(board, pseudo[i], &undo);
-
-        U64 kingBB = board->kingBB & (board->turn ? board->blackBB : board->whiteBB);
-
-        if (!kingBB) continue;
-        int kingSq = LSB(kingBB);
-
-        if (!isSquareAttacked(board, kingSq, board->turn)) legal[legalCount++] = pseudo[i];
-
-        undoMove(board, pseudo[i], &undo);
-    }
-
-    return legalCount;
-}
-
 /* ---------------------------------------------------------------------
  * Fast legal move generation: computes checkers and pinned pieces once
  * (both O(1) via magic bitboards + BETWEEN/LINE lookups), then builds
  * moves directly instead of generating everything and testing each one
- * with a doMove/isSquareAttacked/undoMove cycle. That old approach is
- * kept above as legalMovesSlow for reference/benchmarking.
+ * with a doMove/isSquareAttacked/undoMove cycle. The old generate-and-filter implementation is intentionally removed;
+ * perft tests exercise this optimized generator directly.
  *
  * The one case that still needs a make/unmake check is en passant: a
  * capture can expose the king along a rank even when neither pawn was

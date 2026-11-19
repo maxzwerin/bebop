@@ -1,7 +1,7 @@
-#include "bot.h"
-#include "bebop.h"
+#define _POSIX_C_SOURCE 200809L
+#include "search.h"
+#include "zobrist.h"
 #include <time.h>
-#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -337,23 +337,18 @@ static U64 g_searchHashes[MAX_PLY];
 /* Set for the duration of a search by iterativeDeepen(); lets an external
  * driver (e.g. the UCI "stop" command) cancel a search that has no fixed
  * time budget (UCI "go infinite"/"go depth"). NULL when not applicable. */
-static const volatile bool *g_externalStop = NULL;
+static const atomic_bool *g_externalStop = NULL;
 
-/* Called after a hypothetical move has been made. The real game history does
- * not yet contain this search position, so count prior real-game occurrences
- * plus earlier positions on the current search line. If there are already two,
- * the current hypothetical position would be the third occurrence.
- */
+/* Called after a hypothetical move has been made. The supplied UCI history
+ * contains played positions but not this search position, so also count
+ * matching ancestors on the current search line. */
 static bool isThirdRepetition(Board *board, int ply,
-                              const BotContext *context) {
-    /* The game history supplied by playGame() already includes the root
-     * position. The current hypothetical position is not in that history.
-     * Search-path hashes [1, ply) are the hypothetical ancestors between
-     * the root and this candidate position; exclude the candidate itself.
-     */
-    if (ply <= 0 || !context || !context->positionHash) return false;
+                              const SearchContext *context) {
+    /* The UCI history includes the root position. Search-path hashes
+     * [1, ply) are hypothetical ancestors; exclude the candidate itself. */
+    if (ply <= 0 || !context) return false;
 
-    U64 hash = context->positionHash(board);
+    U64 hash = zobristHash(board);
     int priorOccurrences = 0;
 
     if (context->positionHistory) {
@@ -429,7 +424,7 @@ static void rememberKiller(Move move, int ply) {
 }
 
 static bool timeExpired(void) {
-    if (g_externalStop && *g_externalStop) { g_timeUp = true; return true; }
+    if (g_externalStop && atomic_load_explicit(g_externalStop, memory_order_relaxed)) { g_timeUp = true; return true; }
     if ((g_nodes++ & 255) == 0 && nowMs() >= g_deadlineMs) g_timeUp = true;
     return g_timeUp;
 }
@@ -440,7 +435,7 @@ static bool timeExpired(void) {
  * captures/promotions.
  */
 static int quiescence(Board *board, int alpha, int beta, int ply, int qply,
-                      const BotContext *context) {
+                      const SearchContext *context) {
     if (timeExpired()) return 0;
     if (ply >= MAX_PLY - 1) return evaluate(board) * (board->turn ? 1 : -1);
 
@@ -467,11 +462,9 @@ static int quiescence(Board *board, int alpha, int beta, int ply, int qply,
         Undo undo;
         doMove(board, move, &undo);
 
-        /* Store this child position so deeper search can detect repetitions
-         * created by the hypothetical line as well as the real game history.
-         */
-        g_searchHashes[ply + 1] = context && context->positionHash
-            ? context->positionHash(board) : 0;
+        /* Store the child so deeper search can detect repetitions within
+         * this search line as well as against the played game history. */
+        g_searchHashes[ply + 1] = context ? zobristHash(board) : 0;
 
         /* A draw scores 0: good when losing, but worse than any winning
          * continuation when ahead.
@@ -491,7 +484,7 @@ static int quiescence(Board *board, int alpha, int beta, int ply, int qply,
 
 static int negamax(Board *board, int depth, int alpha, int beta, int ply,
                    int checkExtensions, Move *bestOut,
-                   const BotContext *context) {
+                   const SearchContext *context) {
     if (timeExpired()) return 0;
     if (ply >= MAX_PLY - 1) return evaluate(board) * (board->turn ? 1 : -1);
 
@@ -523,8 +516,7 @@ static int negamax(Board *board, int depth, int alpha, int beta, int ply,
 
         /* Track the hypothetical child position for repetition detection in
          * this line of search. */
-        g_searchHashes[ply + 1] = context && context->positionHash
-            ? context->positionHash(board) : 0;
+        g_searchHashes[ply + 1] = context ? zobristHash(board) : 0;
 
         int score;
         if (isThirdRepetition(board, ply + 1, context)) {
@@ -568,19 +560,17 @@ static int negamax(Board *board, int depth, int alpha, int beta, int ply,
 }
 
 /*
- * Shared iterative-deepening driver used both by the self-play bot and by
- * bebopSearch() (the direct entry point UCI uses). Searches depth 1, 2, 3...
- * up to maxDepth, stopping early once budgetMs elapses or *stopFlag is set,
+ * Iterative-deepening driver used by the UCI engine. Searches depth 1, 2, 3...
+ * up to maxDepth, stopping early once budgetMs elapses or stopFlag is set,
  * and always returns the best move found by the last depth that completed
  * normally (a depth that is cut off mid-search is discarded).
  */
 static Move iterativeDeepen(Board *board, Move legal[], int legalCount,
                             double budgetMs, int maxDepth,
-                            const volatile bool *stopFlag,
-                            const BotContext *context,
-                            BebopSearchInfo *infoOut) {
+                            const atomic_bool *stopFlag,
+                            const SearchContext *context,
+                            SearchInfo *infoOut) {
     if (!g_tablesReady) initEvalTables();
-    if (legalCount <= 0) return 0;
 
     if (infoOut) {
         infoOut->depthCompleted = 0;
@@ -590,6 +580,7 @@ static Move iterativeDeepen(Board *board, Move legal[], int legalCount,
         infoOut->nodes = 0;
     }
 
+    if (legalCount <= 0) return 0;
     if (legalCount == 1) return legal[0];
 
     if (maxDepth <= 0 || maxDepth > 32) maxDepth = 32;
@@ -663,34 +654,10 @@ static Move iterativeDeepen(Board *board, Move legal[], int legalCount,
     return bestMove;
 }
 
-static Move bebopBot(Board *board, Move legal[], int legalCount,
-                            double timeLeftMs, double incMs,
-                            const BotContext *context) {
-    if (legalCount <= 0) return 0;
-    if (legalCount == 1) return legal[0];
-
-    /* Keep a larger safety margin than the baseline and scale with the clock.
-     * This self-play heuristic is intentionally bullet-fast (capped at
-     * 300ms) so engine-vs-engine matches run quickly; bebopSearch() below
-     * is used instead when a caller (UCI) wants to supply its own budget. */
-    double safeTime = timeLeftMs > 0.0 ? timeLeftMs : 0.1;
-    double budget = safeTime / 28.0 + (incMs > 0.0 ? incMs * 0.70 : 0.0);
-    double cap = safeTime * 0.12;
-    if (budget > cap) budget = cap;
-    if (budget > 300.0) budget = 300.0;
-    double minimumBudget = safeTime < 2.0 ? safeTime * 0.05 : 0.2;
-    if (budget < minimumBudget) budget = minimumBudget;
-
-    return iterativeDeepen(board, legal, legalCount, budget, 32, NULL, context, NULL);
-}
-
-Move bebopSearch(Board *board, Move legal[], int legalCount,
-                 double budgetMs, int maxDepth,
-                 const volatile bool *stopFlag,
-                 const BotContext *context,
-                 BebopSearchInfo *infoOut) {
+Move searchBestMove(Board *board, Move legal[], int legalCount,
+                    double budgetMs, int maxDepth,
+                    const atomic_bool *stopFlag,
+                    const SearchContext *context, SearchInfo *infoOut) {
     return iterativeDeepen(board, legal, legalCount, budgetMs, maxDepth,
                            stopFlag, context, infoOut);
 }
-
-REGISTER_BOT("bebop", bebopBot);
