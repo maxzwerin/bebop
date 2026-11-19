@@ -3,16 +3,33 @@
 
 #include "movegen.h"
 
+/*
+ * Read-only information about the current game, supplied by playGame() for
+ * the duration of a bot invocation. The history includes the current root
+ * position. Bots may inspect it but must not retain the pointers after they
+ * return.
+ *
+ * positionHash is the engine's canonical board hash function. Supplying it
+ * here keeps bots from depending on game.c or duplicating Zobrist hashing.
+ */
+typedef U64 (*BotPositionHashFn)(Board *board);
+
+typedef struct {
+    const U64 *positionHistory;
+    int positionHistoryCount;
+    BotPositionHashFn positionHash;
+} BotContext;
+
 /* ---------------------------------------------------------------------
  * Bot interface.
  *
- * A bot is a function that picks one of the legal moves it's handed.
- * `timeLeftMs` / `incMs` are the bot's own clock (bullet time control),
- * in case it wants to budget a search; a bot is free to ignore them
- * entirely (the random bot does).
+ * A bot picks one of the legal moves it is handed. timeLeftMs / incMs are
+ * the bot's own clock. context provides read-only game-level information
+ * such as repetition history; it is valid only during this call.
  * ------------------------------------------------------------------- */
 typedef Move (*BotFunc)(Board *board, Move legal[], int legalCount,
-                         double timeLeftMs, double incMs);
+                        double timeLeftMs, double incMs,
+                        const BotContext *context);
 
 /* Small xorshift RNG. Bots that want randomness should keep their own
  * BotRng (seeded via botRngSeed) rather than reach for rand(), so

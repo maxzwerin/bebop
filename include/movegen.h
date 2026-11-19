@@ -28,6 +28,5 @@ void makeMove(Board *board, Move move);
 bool canCastle(Board *board, int right, U64 occ);
 int pseudoMoves(Board *board, Move moves[]);
 int legalMoves(Board *board, Move legal[]);
-int legalMovesSlow(Board *board, Move legal[]); /* old make/unmake-based generator, kept for benchmarking */
 
 #endif

@@ -22,10 +22,6 @@ const char *reasonName(ResultReason r) {
 
 static int popcountU64(U64 x) { return BITS(x); }
 
-/* Very small subset of insufficient-material detection, covering the
- * cases that are actually reachable/common: K v K, KN v K, KB v K, and
- * KB v KB with same-colored bishops. Anything else is left for the
- * fifty-move/repetition rules to catch, same as most simple engines. */
 static bool insufficientMaterial(Board *b) {
     if (b->pawnBB || b->rookBB || b->queenBB) return false;
 
@@ -58,7 +54,7 @@ GameResult playGame(BotFunc whiteFn, BotFunc blackFn, const char *startFen,
     Board board;
     setFen(&board, startFen ? (char *)startFen : START_FEN);
 
-    double clocks[2] = { timeMs, timeMs }; /* [0]=black [1]=white, matches board->turn */
+    double clocks[2] = { timeMs, timeMs };
 
     U64 history[MAX_HISTORY];
     int historyLen = 0;
@@ -120,7 +116,14 @@ GameResult playGame(BotFunc whiteFn, BotFunc blackFn, const char *startFen,
         BotFunc toMove = turn ? whiteFn : blackFn;
 
         double t0 = nowMsShared();
-        Move chosen = toMove(&board, legal, legalCount, clocks[turn], incMs);
+        BotContext context = {
+            .positionHistory = history,
+            .positionHistoryCount = historyLen,
+            .positionHash = zobristHash
+        };
+
+        Move chosen = toMove(&board, legal, legalCount,
+                             clocks[turn], incMs, &context);
         double elapsed = nowMsShared() - t0;
 
         clocks[turn] -= elapsed;

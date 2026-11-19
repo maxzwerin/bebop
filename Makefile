@@ -1,28 +1,48 @@
-CC      = gcc
-CFLAGS  = -O2 -Wall -Wextra -std=gnu11
-LDLIBS  = -lm
+CC = gcc
 
-CORE_SRC = utils.c movegen.c zobrist.c bot_registry.c game.c main.c
-BOT_SRC  = $(wildcard bots/*.c)
+CFLAGS = -O3 -Wall -Wextra -Iinclude
+LDFLAGS =
 
-SRC = $(CORE_SRC) $(BOT_SRC)
-OBJ = $(SRC:.c=.o)
+RAYLIB_CFLAGS := $(shell pkg-config --cflags raylib)
+RAYLIB_LIBS   := $(shell pkg-config --libs raylib)
 
-BIN = chessmatch
+CFLAGS += $(RAYLIB_CFLAGS) -pthread
+LDLIBS += $(RAYLIB_LIBS) -pthread
 
-.PHONY: all clean list
+BUILD = build
 
-all: $(BIN)
+ENGINE_SRC = \
+    src/engine/movegen.c \
+    src/engine/utils.c \
+    src/engine/zobrist.c
 
-$(BIN): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDLIBS)
-	rm -f $(OBJ)
+GAME_SRC = \
+    src/game/game.c \
+    src/game/pgn.c
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+GUI_SRC = \
+    src/gui/gui.c
 
-list: $(BIN)
-	./$(BIN) --list
+BOT_SRC = \
+    src/bots/bot_registry.c \
+    $(wildcard bots/*.c)
+
+MAIN_SRC = src/main.c
+
+ALL_SRC = $(ENGINE_SRC) $(GAME_SRC) $(GUI_SRC) $(BOT_SRC)
+
+.PHONY: all clean perft
+
+all: $(BUILD)/chessmatch
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
+$(BUILD)/chessmatch: $(ALL_SRC) $(MAIN_SRC) | $(BUILD)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBS)
+
+perft: $(ENGINE_SRC) perft.c | $(BUILD)
+	$(CC) $(CFLAGS) $^ -o $(BUILD)/perft $(LDFLAGS) -lm
 
 clean:
-	rm -f $(OBJ) $(BIN)
+	rm -rf $(BUILD)

@@ -84,20 +84,23 @@ typedef uint32_t Move;
  *                we can use king move position in place of the piece
  *                position because of the castle flag. joy!
  * no need for enp flag!! this is handled in the Board state */
-#define EMPTY_FLAG 0         // 0000
-#define CASTLE_FLAG 1        // 0001
-#define CAPTURE_FLAG 4       // 0100
-#define PROMO_FLAG 8         // 1000
-#define KNIGHT_PROMO_FLAG 8  // 1000
-#define ROOK_PROMO_FLAG 9    // 1001
-#define BISHOP_PROMO_FLAG 10 // 1010
-#define QUEEN_PROMO_FLAG 11  // 1011
+#define EMPTY_FLAG        0x0
+#define CASTLE_FLAG       0x1
+#define CAPTURE_FLAG      0x4
+
+#define PROMO_FLAG        0x8
+#define PROMO_PIECE_MASK  0x7
+
+#define KNIGHT_PROMO_FLAG (PROMO_FLAG | KNIGHT)
+#define BISHOP_PROMO_FLAG (PROMO_FLAG | BISHOP)
+#define ROOK_PROMO_FLAG   (PROMO_FLAG | ROOK)
+#define QUEEN_PROMO_FLAG  (PROMO_FLAG | QUEEN)
 
 #define ENCODE_MOVE(from, to, piece, flag) \
     (((from) & 0x3f) | (((to) & 0x3f) << 6) | (((piece) & 0xf) << 12) | (((flag) & 0xf) << 16))
 
-#define IS_PROMO(flag) ((int)((flag) & PROMO_FLAG))
-#define PROMO_PT(flag) ((flag & 0x3) + KNIGHT)
+#define IS_PROMO(flag) ((flag) & PROMO_FLAG)
+#define PROMO_PT(flag) ((flag) & PROMO_PIECE_MASK)
 #define IS_CASTLE(flag) ((flag) == CASTLE_FLAG)
 
 #define EXTRACT_FROM(m)  (((m) >> 0)  & 0x3f)

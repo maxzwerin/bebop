@@ -1,14 +1,15 @@
 #include "movegen.c"
+#include "utils.c"
 #include <time.h>
 
 // COMPILE WITH:
-// clang perft.c -O3 -march=native -flto
+// gcc perft.c -o perft -O3 -march=native -flto
 // -------------------------------------
-// currently running at ~ [7.80s]
+// currently running at ~ [4.46s]
 
 typedef unsigned long long u64;
 
-#define PRETTY_PRINT true
+#define PRETTY_PRINT false
 #define MAX_DEPTH 5
 #define COLOR_RED   "\x1b[31m"
 #define COLOR_GREEN "\x1b[32m"
